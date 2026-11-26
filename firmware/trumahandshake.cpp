@@ -1,7 +1,14 @@
 #include "trumahandshake.hpp"
 #include <cstring>
+#include <cstdio>
 
 namespace trumahandshake {
+
+// Matches trumalog::MAX_LINE_LEN (22) without introducing a hard
+// dependency on trumalog.hpp from this protocol-logic file -- the log
+// callback contract only requires "a short C string", trumalog is just
+// the one real consumer on this project's T3 target.
+static constexpr size_t trumalog_line_cap = 22;
 
 static bool identifier_matches_at(const uint8_t *payload, size_t len, size_t offset, size_t compare_len) {
     if (len < offset + compare_len) return false;
@@ -56,6 +63,7 @@ void Protocol::on_master_frame(const trumalin::TransportFrameHeader &header, Res
         // Heartbeat request -- reply with NODE_ADDRESS, len=2, sid=0xF9, payload=0x00
         uint8_t reply[] = {NODE_ADDRESS, 0x02, 0xF9, 0x00, 0xFF, 0xFF, 0xFF, 0xFF};
         queue.push(reply, sizeof(reply));
+        log("RX heartbeat");
         return;
     }
 
@@ -68,6 +76,7 @@ void Protocol::on_master_frame(const trumalin::TransportFrameHeader &header, Res
         if (header.payload[4] == NODE_ADDRESS) {
             uint8_t reply[] = {NODE_ADDRESS, 0x01, 0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
             queue.push(reply, sizeof(reply));
+            log("Registered w/ CP Plus");
         }
         // else: silently ignore -- CP Plus trying to assign a different NAD
         // than the one this firmware is hardcoded to use is not handled.
@@ -140,6 +149,13 @@ void Protocol::complete_transportlayer_request(uint8_t sid, const uint8_t *paylo
                 trumastatus::MainStatus status;
                 if (trumastatus::parse_main_status(&payload[14], len - 14, &status)) {
                     last_status_ = status;
+                    if (log_cb_) {
+                        char line[trumalog_line_cap];
+                        double room = status.current_temp_room_celsius.has_value() ? *status.current_temp_room_celsius : 0.0;
+                        double water = status.current_temp_water_celsius.has_value() ? *status.current_temp_water_celsius : 0.0;
+                        snprintf(line, sizeof(line), "RX room=%.1f wtr=%.1f", room, water);
+                        log(line);
+                    }
                 }
             }
             // command_id == COMMAND_ID_COMMAND_COUNTER (0x0D) and other
@@ -152,6 +168,10 @@ void Protocol::complete_transportlayer_request(uint8_t sid, const uint8_t *paylo
         if (!pending_write_.has_value()) {
             return; // inetbox.py: "Not responding, waiting for status message first!"
         }
+
+        // Capture before pending_write_ is cleared below -- needed for the
+        // log line after the buffer has been built and sent.
+        trumastatus::MainStatus written = *pending_write_;
 
         uint8_t write_payload[12];
         size_t write_len = trumastatus::serialize_main_status_write(*pending_write_, write_payload, sizeof(write_payload));
@@ -202,6 +222,13 @@ void Protocol::complete_transportlayer_request(uint8_t sid, const uint8_t *paylo
         }
 
         pending_write_.reset();
+
+        if (log_cb_) {
+            char line[trumalog_line_cap];
+            double room = written.target_temp_room_celsius.has_value() ? *written.target_temp_room_celsius : 0.0;
+            snprintf(line, sizeof(line), "TX room=%.1f #%d", room, (int)command_counter_);
+            log(line);
+        }
     }
 }
 

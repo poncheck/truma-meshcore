@@ -123,6 +123,16 @@ public:
     // not just the first).
     uint8_t command_counter() const { return command_counter_; }
 
+    // Optional callback invoked with a short, human-readable line (<=21
+    // chars recommended, to fit the OLED display -- see trumalog.hpp) for
+    // every significant protocol event: heartbeat, assign-NAD, status
+    // received, write sent. Pure C function pointer (no std::function) to
+    // stay lightweight and avoid heap allocation on the microcontroller.
+    // Set to nullptr (the default) to disable -- this class has zero
+    // Arduino/display dependency either way, logging is entirely optional.
+    using LogCallback = void (*)(const char *line);
+    void set_log_callback(LogCallback cb) { log_cb_ = cb; }
+
 private:
     // Multi-frame reassembly state for an in-progress "first"+"consecutive" sequence.
     std::optional<uint8_t> reassembly_sid_;
@@ -133,6 +143,9 @@ private:
     std::optional<trumastatus::MainStatus> pending_write_;
     std::optional<trumastatus::MainStatus> last_status_;
     uint8_t command_counter_ = 0;
+    LogCallback log_cb_ = nullptr;
+
+    void log(const char *line) { if (log_cb_) log_cb_(line); }
 
     void complete_transportlayer_request(uint8_t sid, const uint8_t *payload, size_t len, ResponseQueue &queue);
 };

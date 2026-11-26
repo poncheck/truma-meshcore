@@ -111,7 +111,7 @@ alongside a working CP Plus.
 
 ## What's done / what's not (as of 2026-11-26)
 
-✅ **Done, host-tested (119/119 checks passing, `firmware/run_tests.sh`, no hardware needed):**
+✅ **Done, host-tested (127/127 checks passing, `firmware/run_tests.sh`, no hardware needed):**
 - LIN transport-layer primitives (checksum, PID parity, frame parsing) — `trumalin.{hpp,cpp}`
 - Value conversions (temperature codes, heating mode, water target, error codes) — `trumaconv.{hpp,cpp}`
 - Truma main status buffer parse/serialize (cmd 0x33) — `trumastatus.{hpp,cpp}`
@@ -134,6 +134,16 @@ alongside a working CP Plus.
   mix to 0 on a real heater every time only the room temperature was
   changed. See `test_write_merges_unset_fields_from_last_status` in the
   test suite for the exact reproduction.
+- **On-screen activity log** — `trumalog.{hpp,cpp}` (fixed-size ring
+  buffer of short log lines) + `trumahandshake::Protocol::set_log_callback()`
+  (emits a line for every heartbeat, status received, write sent). Lets you
+  SEE what's happening on the physical T3 display (RX/TX lines, room/water
+  temps, write counter) without needing a laptop/serial monitor connected
+  once it's installed in the camper — this was the whole point of moving
+  off the (display-less) XIAO nRF52 to this board. Rendering
+  (`TrumaLogDisplay.{h,cpp}`) is Arduino-specific (uses MeshCore's
+  `DisplayDriver`), not part of the host test suite, but the ring buffer
+  logic it draws from is.
 
 ✅ **Confirmed on real hardware (LilyGO T3 V1.6.1, physical unit):**
 - Stock MeshCore `LilyGo_TLora_V2_1_1_6_repeater` build flashes, boots,
@@ -187,7 +197,9 @@ firmware/
   trumalin.hpp/.cpp        # LIN transport-layer primitives
   trumaconv.hpp/.cpp       # temperature/mode/error code conversions
   trumastatus.hpp/.cpp     # main status buffer (cmd 0x33) parse/serialize
-  trumahandshake.hpp/.cpp  # LIN master<->slave handshake (WIP, see gaps above)
+  trumahandshake.hpp/.cpp  # LIN master<->slave handshake
+  trumalog.hpp/.cpp        # fixed-size ring buffer for the on-screen activity log
+  TrumaLogDisplay.h/.cpp   # renders trumalog onto the T3's OLED (not host-testable)
   aes128.hpp/.cpp          # from-scratch AES-128 block cipher
   victronble.hpp/.cpp      # BLE advertisement container + AES-CTR decrypt
   victrondevices.hpp/.cpp  # SmartShunt/SmartSolar bitfield parsers
