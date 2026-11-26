@@ -1,40 +1,49 @@
 #pragma once
-// nRF52/Bluefruit BLE scanning glue for Victron "Instant Readout" advertisements.
-// Wraps our host-tested victronble::decrypt + victrondevices parsers --
-// this file itself is Arduino/Bluefruit-specific and therefore NOT part of
-// the host test suite (no g++ unit tests here), but it deliberately contains
-// as little logic as possible: just extract manufacturer-data bytes from the
-// BLE scan report and MAC filter, then hand off to the already-verified
-// pure-logic layer.
+// ESP32 (Bluedroid "BLEDevice" library) BLE scanning glue for Victron
+// "Instant Readout" advertisements, for the LilyGO T3_V1.6.1
+// (ESP32 + SX1276) target. Wraps our host-tested victronble::decrypt +
+// victrondevices parsers -- this file itself is Arduino/ESP32-BLEDevice
+// specific and therefore NOT part of the host test suite (no g++ unit
+// tests here), but deliberately contains as little logic as possible: just
+// extract manufacturer-data bytes from the BLE scan callback and MAC
+// filter, then hand off to the already-verified pure-logic layer.
+//
+// NOTE: this supersedes the earlier nRF52/Bluefruit version of this file
+// (VictronScanner for xiao_nrf52) -- that target was dropped in favour of
+// the LilyGO T3_V1.6.1 (see project notes, 2026-11-26). The nRF52 variant
+// is kept in git history but no longer the active target.
 //
 // Usage (wired up in main.cpp):
-//   VictronScanner::begin();            // call once in setup()
-//   VictronScanner::loop();             // call every loop() iteration (cheap, just checks staleness)
-//   VictronScanner::getShunt()          // -> const VictronReading& (check .fresh)
-//   VictronScanner::getSolar()          // -> const VictronReading&
+//   VictronScanner::begin();   // call once in setup(), AFTER MeshCore's own
+//                               // BLEDevice::init() if this board ALSO runs
+//                               // a BLE companion interface -- BLEDevice::init()
+//                               // must only be called once. For the plain
+//                               // LoRa-mesh sensor role (no BLE companion),
+//                               // this begin() performs that init itself.
+//   VictronScanner::loop();    // call every loop() iteration (cheap, just checks staleness + restarts scan)
+//   VictronScanner::getShunt() // -> const VictronReading&
+//   VictronScanner::getSolar() // -> const VictronReading&
 
 #include <cstdint>
-#include <optional>
 #include "victrondevices.hpp"
 
 struct VictronReading {
-    bool fresh = false;          // true if updated within VICTRON_STALE_SECONDS
+    bool fresh = false;
     uint32_t last_seen_millis = 0;
-    victrondevices::BatteryMonitorReading shunt{};   // valid only for the SmartShunt device
-    victrondevices::SolarChargerReading solar{};     // valid only for the SmartSolar device
+    victrondevices::BatteryMonitorReading shunt{};
+    victrondevices::SolarChargerReading solar{};
 };
 
 namespace VictronScanner {
 
-// `shunt_mac`/`solar_mac` are 6-byte arrays, little-endian as reported by
-// Bluefruit's ble_gap_addr_t.addr (same byte order as advertised over the
-// air -- verify against `VICTRON_SMARTSHUNT_MAC`/`VICTRON_SMARTSOLAR_MAC`
-// from ~/.hermes/.env, which are in human-readable AA:BB:CC:DD:EE:FF form
-// and must be reversed to little-endian byte order when hardcoding here).
+// MAC bytes as printed by BLE (human order, e.g. the same order as shown in
+// the Victron Connect app / `VICTRON_SMARTSHUNT_MAC` -- NOT pre-reversed;
+// BLEAddress comparison is done in whatever order ESP32's BLEAddress::equals
+// uses internally, verified once against real hardware, not assumed here).
 void begin(const uint8_t shunt_mac[6], const uint8_t shunt_key[16],
            const uint8_t solar_mac[6], const uint8_t solar_key[16]);
 
-void loop(); // marks readings stale if no update for too long
+void loop();
 
 const VictronReading& getShunt();
 const VictronReading& getSolar();

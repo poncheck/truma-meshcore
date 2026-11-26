@@ -1,13 +1,13 @@
 #include "VictronScanner.h"
 #include "victronble.hpp"
-#include <bluefruit.h>
+#include <BLEDevice.h>
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
 #include <cstring>
 
 namespace VictronScanner {
 
 constexpr uint32_t STALE_AFTER_MS = 30000; // mark a reading stale after 30s with no update
-
-static BLEScanner scanner;
 
 static uint8_t s_shunt_mac[6];
 static uint8_t s_shunt_key[16];
@@ -17,11 +17,15 @@ static uint8_t s_solar_key[16];
 static VictronReading s_shunt;
 static VictronReading s_solar;
 
-static bool mac_matches(const uint8_t *addr, const uint8_t *mac) {
-    return memcmp(addr, mac, 6) == 0;
+static bool mac_matches(BLEAddress addr, const uint8_t *mac) {
+    // BLEAddress::toString() prints "aa:bb:cc:dd:ee:ff" in the same
+    // human-readable order as our stored MACs; comparing via getNative()
+    // bytes directly instead to avoid a string round-trip per advertisement.
+    const uint8_t *native = addr.getNative();
+    return memcmp(native, mac, 6) == 0;
 }
 
-static void handle_advertisement(const uint8_t *mfg_data, uint8_t mfg_len,
+static void handle_advertisement(const uint8_t *mfg_data, size_t mfg_len,
                                   const uint8_t *key, bool is_shunt) {
     if (mfg_len < 7) return; // too short to even contain the container header
 
@@ -45,31 +49,30 @@ static void handle_advertisement(const uint8_t *mfg_data, uint8_t mfg_len,
     }
 }
 
-static void scan_callback(ble_gap_evt_adv_report_t *report) {
-    const uint8_t *addr = report->peer_addr.addr; // little-endian, as broadcast
+class VictronAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+public:
+    void onResult(BLEAdvertisedDevice advertisedDevice) override {
+        bool is_shunt = mac_matches(advertisedDevice.getAddress(), s_shunt_mac);
+        bool is_solar = !is_shunt && mac_matches(advertisedDevice.getAddress(), s_solar_mac);
+        if (!is_shunt && !is_solar) return; // not one of ours
 
-    bool is_shunt = mac_matches(addr, s_shunt_mac);
-    bool is_solar = !is_shunt && mac_matches(addr, s_solar_mac);
-    if (!is_shunt && !is_solar) {
-        Bluefruit.Scanner.resume();
-        return; // not one of ours
-    }
+        if (!advertisedDevice.haveManufacturerData()) return;
 
-    uint8_t mfg_data[31]; // max BLE advertisement payload size
-    uint8_t mfg_len = Bluefruit.Scanner.parseReportByType(
-        report, BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA, mfg_data, sizeof(mfg_data));
+        std::string mfg = advertisedDevice.getManufacturerData();
+        if (mfg.size() <= 2) return;
 
-    if (mfg_len > 2) {
         // First 2 bytes of BLE manufacturer-data are the company ID (0x02E1
         // for Victron, little-endian) -- victronble::parse_container expects
-        // the data starting from AFTER that company-id prefix (it re-reads a
-        // "prefix" field itself from what follows, per the Instant Readout
-        // format), so skip exactly those 2 bytes here.
-        handle_advertisement(&mfg_data[2], mfg_len - 2, is_shunt ? s_shunt_key : s_solar_key, is_shunt);
+        // the data starting AFTER that company-id prefix (it reads its own
+        // "prefix" field from what follows, per the Instant Readout format),
+        // so skip exactly those 2 bytes here.
+        const uint8_t *data = reinterpret_cast<const uint8_t *>(mfg.data());
+        handle_advertisement(data + 2, mfg.size() - 2, is_shunt ? s_shunt_key : s_solar_key, is_shunt);
     }
+};
 
-    Bluefruit.Scanner.resume();
-}
+static VictronAdvertisedDeviceCallbacks s_callbacks;
+static BLEScan *s_scan = nullptr;
 
 void begin(const uint8_t shunt_mac[6], const uint8_t shunt_key[16],
            const uint8_t solar_mac[6], const uint8_t solar_key[16]) {
@@ -78,20 +81,22 @@ void begin(const uint8_t shunt_mac[6], const uint8_t shunt_key[16],
     memcpy(s_solar_mac, solar_mac, 6);
     memcpy(s_solar_key, solar_key, 16);
 
-    // NOTE: Bluefruit.begin()/Bluefruit.Scanner are assumed already
-    // initialised by MeshCore's own BLE setup (companion radio BLE mode) if
-    // this board also runs a BLE companion interface; if not (pure
-    // LoRa-mesh sensor role, no BLE companion), this begin() call performs
-    // the full Bluefruit stack init itself. Verify which applies once the
-    // target `env:Xiao_nrf52_...` build variant is finalised -- calling
-    // Bluefruit.begin() twice is undefined behaviour on this stack.
-    Bluefruit.begin();
-    Bluefruit.setTxPower(-12); // we only need scanning, not advertising -- keep TX low
+    // NOTE: BLEDevice::init() must only be called ONCE per process. If this
+    // board also runs a BLE companion interface (ENABLE_BLE_COMPANION-style
+    // build), that code path's init must run first/instead and this begin()
+    // must skip re-initialising -- verify which build variant applies
+    // before wiring this into main.cpp's setup(). For the plain LoRa-mesh
+    // sensor role (no BLE companion) targeted here, this is the only BLE
+    // user, so a fresh init is correct.
+    BLEDevice::init("");
 
-    Bluefruit.Scanner.setRxCallback(scan_callback);
-    Bluefruit.Scanner.useActiveScan(false); // passive scan -- matches Victron "Instant Readout" (no pairing/response needed)
-    Bluefruit.Scanner.filterMSD(0x02E1); // Victron's BLE company identifier
-    Bluefruit.Scanner.start(0); // 0 = scan forever
+    s_scan = BLEDevice::getScan();
+    s_scan->setAdvertisedDeviceCallbacks(&s_callbacks, /*wantDuplicates=*/true);
+    s_scan->setActiveScan(false); // passive scan -- matches Victron "Instant Readout" (no pairing/response needed)
+    s_scan->setInterval(100);
+    s_scan->setWindow(90);
+    // 0 = scan indefinitely; callback-driven, loop() below just handles staleness.
+    s_scan->start(0, nullptr, false);
 }
 
 void loop() {
