@@ -94,3 +94,31 @@ Once you've checked, tell me:
    anything already in use?
 
 Then I'll lock in the exact pin assignment in the firmware config.
+
+## RESULT (confirmed on real hardware, 2026-11-26)
+
+- **GPIO21/22 (OLED SDA/SCL) confirmed** to match MeshCore's assumption —
+  verified directly on the physical board.
+- **GPIO14 confirmed as the real LoRa RESET pin** — flashed the stock
+  `LilyGo_TLora_V2_1_1_6_repeater` build (uses `P_LORA_RESET=14`) and
+  confirmed on live serial output: radio initialized successfully, node
+  generated an identity, responded to CLI commands (`get radio`, `advert`),
+  and actually transmitted a real advertisement over the air. If GPIO14
+  weren't the true reset line, SPI/SX1276 init would have failed and none
+  of that would have worked. (This also resolves the diagram disagreement
+  mentioned above — GPIO14 is correct for this physical unit, not GPIO23.)
+- **GPIO4 (TX) / GPIO34 (RX) confirmed working as a UART pair** — flashed a
+  minimal standalone test sketch (Serial2 on RX=34/TX=4 @ 9600 baud,
+  matching the LIN bus rate) with zero MeshCore/LoRa/OLED code involved.
+  With no physical connection, no crash/conflict (expected floating-pin
+  noise on the input-only RX line). With a jumper wire bridging GPIO4 to
+  GPIO34, the test byte (0xAA) echoed back repeatedly and reliably —
+  definitive confirmation both pins are electrically sound and don't
+  interfere with LoRa/OLED/button on this board.
+
+**Locked-in pin assignment for the LIN transceiver:**
+- Transceiver **TX** -> ESP32 **GPIO34** (RX)
+- Transceiver **RX** <- ESP32 **GPIO4** (TX)
+
+GPIO13/23/32 were not needed once GPIO4/34 confirmed clean — no further
+continuity testing required for those.
