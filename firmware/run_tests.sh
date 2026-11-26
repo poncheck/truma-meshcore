@@ -8,3 +8,6 @@ g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumalin test/test_trumalin.cpp trumal
 echo "---"
 g++ -std=c++17 -Wall -Wextra -o /tmp/test_victronble test/test_victronble.cpp victronble.cpp victrondevices.cpp aes128.cpp
 /tmp/test_victronble
+echo "---"
+g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumastatus test/test_trumastatus.cpp trumastatus.cpp trumaconv.cpp
+/tmp/test_trumastatus
