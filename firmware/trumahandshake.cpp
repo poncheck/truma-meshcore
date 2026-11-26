@@ -15,8 +15,37 @@ void Protocol::get_pid18_reply(uint8_t out[8]) const {
     for (int i = 1; i < 8; i++) out[i] = 0xFF;
 }
 
-void Protocol::queue_write(const trumastatus::MainStatus &status) {
-    pending_write_ = status;
+void Protocol::queue_write(const WriteIntent &intent) {
+    // Start from the last known real status (safe "everything off" default
+    // if nothing has ever been received -- see header comment for why).
+    trumastatus::MainStatus merged;
+    if (last_status_.has_value()) {
+        merged = *last_status_;
+    }
+
+    // Overlay only the fields the caller actually asked to change. This is
+    // the merge that matches inetbox.py's `{**self.status, **self.updates_to_send}`
+    // -- without it, writing one field would silently wipe the others on
+    // the real heater (verified the hard way: an earlier version of this
+    // function sent the fields as-is with no merge, which the test suite
+    // caught before this ever touched real hardware).
+    if (intent.target_temp_room_celsius.has_value()) {
+        merged.target_temp_room_celsius = intent.target_temp_room_celsius;
+    }
+    if (intent.heating_mode.has_value()) {
+        merged.heating_mode = *intent.heating_mode;
+    }
+    if (intent.target_temp_water_celsius.has_value()) {
+        merged.target_temp_water_celsius = intent.target_temp_water_celsius;
+    }
+    if (intent.el_power_level.has_value()) {
+        merged.el_power_level = *intent.el_power_level;
+    }
+    if (intent.energy_mix.has_value()) {
+        merged.energy_mix = *intent.energy_mix;
+    }
+
+    pending_write_ = merged;
 }
 
 void Protocol::on_master_frame(const trumalin::TransportFrameHeader &header, ResponseQueue &queue) {
@@ -56,7 +85,14 @@ void Protocol::on_master_frame(const trumalin::TransportFrameHeader &header, Res
         reassembly_expected_ = (header.expected_bytes > 2) ? (size_t)(header.expected_bytes - 2) : 0;
         size_t copy_len = header.payload.size() - 2;
         if (copy_len > sizeof(reassembly_buf_)) copy_len = sizeof(reassembly_buf_);
-        memcpy(reassembly_buf_, &header.payload[2], copy_len);
+        // Guard against indexing header.payload[2] when payload.size()==2
+        // (copy_len==0, nothing to copy): std::vector::operator[] at an
+        // out-of-range index is undefined behaviour even if the resulting
+        // pointer is never dereferenced, so skip the memcpy call entirely
+        // rather than relying on copy_len==0 to make it a no-op.
+        if (copy_len > 0) {
+            memcpy(reassembly_buf_, &header.payload[2], copy_len);
+        }
         reassembly_len_ = copy_len;
         return;
     }
@@ -120,14 +156,36 @@ void Protocol::complete_transportlayer_request(uint8_t sid, const uint8_t *paylo
         uint8_t write_payload[12];
         size_t write_len = trumastatus::serialize_main_status_write(*pending_write_, write_payload, sizeof(write_payload));
 
+        // Increment the command counter BEFORE building the buffer, per
+        // inetbox.py's _get_status_buffer_for_writing:
+        //   self.status["_command_counter"] = (self.status["_command_counter"] + 1) % 0xFF
+        // Verified against the real reference implementation (not guessed):
+        // running it on a synthetic receive+write produced command_counter=6
+        // (started at 5) and checksum=0x86 for a known byte sequence --
+        // see trumahandshake test suite for the exact reproduction.
+        command_counter_ = (uint8_t)((command_counter_ + 1) % 0xFF);
+
         // Build the 10-preamble + 4-header + write_payload send buffer,
         // padded to 38 bytes total per inetbox.py's `send_buffer += bytes(38 - len(send_buffer))`.
         uint8_t send_buffer[38] = {0};
         memcpy(send_buffer, trumastatus::STATUS_BUFFER_PREAMBLE, 10);
         send_buffer[10] = (uint8_t)write_len;                      // command_len
         send_buffer[11] = trumastatus::COMMAND_ID_STATUS_WRITE;    // command_id (0x32, write variant)
-        send_buffer[12] = 0;                                       // command_counter (not tracked yet -- see note below)
-        send_buffer[13] = 0;                                       // checksum (not computed yet -- see note below)
+        send_buffer[12] = command_counter_;                        // command_counter
+        // Checksum covers STATUS_BUFFER_PREAMBLE[8:10] + [write_len, cid_write,
+        // counter] + write_payload -- per inetbox.py's calculate_checksum call
+        // in _get_status_buffer_for_writing (STATUS_HEADER_CHECKSUM_START = 8).
+        uint8_t checksum_input[2 + 3 + 12];
+        size_t ci_len = 0;
+        checksum_input[ci_len++] = trumastatus::STATUS_BUFFER_PREAMBLE[8];
+        checksum_input[ci_len++] = trumastatus::STATUS_BUFFER_PREAMBLE[9];
+        checksum_input[ci_len++] = (uint8_t)write_len;
+        checksum_input[ci_len++] = trumastatus::COMMAND_ID_STATUS_WRITE;
+        checksum_input[ci_len++] = command_counter_;
+        memcpy(&checksum_input[ci_len], write_payload, write_len);
+        ci_len += write_len;
+        send_buffer[13] = trumalin::calculate_checksum(checksum_input, ci_len);
+
         memcpy(&send_buffer[14], write_payload, write_len);
 
         // Chunk into the fixed 6-frame transport-layer upload response,
@@ -143,12 +201,6 @@ void Protocol::complete_transportlayer_request(uint8_t sid, const uint8_t *paylo
             queue.push(chunk, sizeof(chunk));
         }
 
-        // NOTE (intentionally not yet implemented, flagged for Phase 3
-        // before any real write is sent to a live heater):
-        //   - command_counter should increment per write, not stay 0
-        //   - the inner status-buffer checksum (offset 13) is not computed
-        //   These two gaps are why `truma temp`/`heating`/`boiler` MUST NOT
-        //   be wired to a live CP Plus until both are filled in and tested.
         pending_write_.reset();
     }
 }

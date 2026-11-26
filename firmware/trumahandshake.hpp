@@ -73,14 +73,55 @@ public:
     // Returns the 8-byte reply payload (FE = "waiting", FF = "I have data for you").
     void get_pid18_reply(uint8_t out[8]) const;
 
+    // Describes ONLY the field(s) a caller actually wants to change. All
+    // fields optional/unset by default -- unset fields are left untouched
+    // (carried over from the last known status), per queue_write()'s merge
+    // behaviour below. This is the type CLI command handlers (`truma temp`,
+    // `truma heating`, `truma boiler`) should build and pass to queue_write().
+    struct WriteIntent {
+        std::optional<double> target_temp_room_celsius;
+        std::optional<trumastatus::HeatingMode> heating_mode;
+        std::optional<double> target_temp_water_celsius;
+        std::optional<uint16_t> el_power_level;
+        std::optional<uint8_t> energy_mix;
+    };
+
     // Queue a write: the next time CP Plus asks for an upload (SID 0xBA),
-    // this status will be sent instead of just acking. Pass std::nullopt to
-    // clear a pending write (e.g. after confirming it was sent).
-    void queue_write(const trumastatus::MainStatus &status);
+    // the merged status will be sent instead of just acking.
+    //
+    // SAFETY-CRITICAL MERGE BEHAVIOUR (matches inetbox.py's actual write
+    // semantics, verified against the reference --
+    // `{**self.status, **self.updates_to_send}` in
+    // _get_status_buffer_for_writing): the Truma protocol's write buffer is
+    // NOT a sparse "only change what I mention" update at the wire level --
+    // every write resends ALL fields (target_temp_room, heating_mode,
+    // target_temp_water, el_power_level, energy_mix). If a caller only sets
+    // `intent.target_temp_room_celsius` and nothing else, this method fills
+    // in every other field from `last_received_status()` (the most recent
+    // real status received from CP Plus) before building the write buffer --
+    // so the heater's other settings (boiler mode, energy mix, etc.) are
+    // preserved exactly as they were, not reset to defaults.
+    //
+    // If `last_received_status()` has never been populated (no SID 0xBB
+    // download has been received yet from a live CP Plus), any UNSET field
+    // in `intent` falls back to MainStatus{}'s zero-value defaults (heating
+    // off, water heater off, energy_mix 0) -- this is deliberately the safe
+    // "everything off" state, not an attempt to guess the heater's real
+    // current configuration. Do not call queue_write() with a sparse
+    // intent before the read path is confirmed working (see README's
+    // "Recommended bring-up order" -- read-only first, writes last).
+    void queue_write(const WriteIntent &intent);
     bool has_pending_write() const { return pending_write_.has_value(); }
 
     // The most recent status received FROM the CP Plus (via SID 0xBB), if any.
     const std::optional<trumastatus::MainStatus>& last_received_status() const { return last_status_; }
+
+    // Current command counter value (0-254, wraps per inetbox.py's `% 0xFF`).
+    // Starts at 0; incremented BEFORE each write is sent (matches
+    // `self.status["_command_counter"] = (self.status["_command_counter"] + 1) % 0xFF`
+    // in inetbox.py's _get_status_buffer_for_writing, run on every write,
+    // not just the first).
+    uint8_t command_counter() const { return command_counter_; }
 
 private:
     // Multi-frame reassembly state for an in-progress "first"+"consecutive" sequence.
@@ -91,6 +132,7 @@ private:
 
     std::optional<trumastatus::MainStatus> pending_write_;
     std::optional<trumastatus::MainStatus> last_status_;
+    uint8_t command_counter_ = 0;
 
     void complete_transportlayer_request(uint8_t sid, const uint8_t *payload, size_t len, ResponseQueue &queue);
 };

@@ -111,13 +111,29 @@ alongside a working CP Plus.
 
 ## What's done / what's not (as of 2026-11-26)
 
-✅ **Done, host-tested (89/89 checks passing, `firmware/run_tests.sh`, no hardware needed):**
+✅ **Done, host-tested (119/119 checks passing, `firmware/run_tests.sh`, no hardware needed):**
 - LIN transport-layer primitives (checksum, PID parity, frame parsing) — `trumalin.{hpp,cpp}`
 - Value conversions (temperature codes, heating mode, water target, error codes) — `trumaconv.{hpp,cpp}`
 - Truma main status buffer parse/serialize (cmd 0x33) — `trumastatus.{hpp,cpp}`
 - AES-128 (from scratch, no external crypto lib) — `aes128.{hpp,cpp}`
 - Victron BLE advertisement decrypt (AES-128-CTR) — `victronble.{hpp,cpp}`
 - SmartShunt/SmartSolar bitfield parsers — `victrondevices.{hpp,cpp}`
+- **LIN master<->slave handshake state machine** (heartbeat, assign-NAD,
+  multi-frame upload/download, command_counter increment, inner checksum
+  computation) — `trumahandshake.{hpp,cpp}`. The two previously-flagged
+  gaps are now fixed and tested: command_counter increments correctly and
+  the inner status-buffer checksum is computed, both verified byte-for-byte
+  against real output from the Python reference implementation (counter=6,
+  checksum=0x86 for a known sequence).
+  **Safety-critical fix included:** `queue_write()` now takes a sparse
+  `WriteIntent` (only the field(s) you actually want to change) and merges
+  it onto the last real status received from CP Plus before building the
+  write buffer. An earlier version sent whatever fields were set with no
+  merge — the test suite caught, before any hardware was touched, that
+  this would have silently reset the water heater to "off" and the energy
+  mix to 0 on a real heater every time only the room temperature was
+  changed. See `test_write_merges_unset_fields_from_last_status` in the
+  test suite for the exact reproduction.
 
 ✅ **Confirmed on real hardware (LilyGO T3 V1.6.1, physical unit):**
 - Stock MeshCore `LilyGo_TLora_V2_1_1_6_repeater` build flashes, boots,
@@ -128,12 +144,6 @@ alongside a working CP Plus.
   above.
 
 🚧 **Written but NOT YET host-tested or hardware-tested:**
-- `trumahandshake.{hpp,cpp}` — the LIN master↔slave handshake state machine
-  (heartbeat, assign-NAD, multi-frame upload/download). **Known gaps,
-  explicitly flagged in code comments: write command_counter is hardcoded
-  to 0 instead of incrementing, and the inner status-buffer checksum is not
-  computed.** Both must be fixed and tested before any `truma temp/heating/
-  boiler` write command is ever sent to a live heater.
 - `VictronScanner.{hpp,cpp}` — ESP32 `BLEDevice`/Bluedroid BLE scanning
   glue (ported from an earlier nRF52/Bluefruit version when the target
   board changed). Arduino-specific, can't be unit-tested on the host;
@@ -162,9 +172,12 @@ alongside a working CP Plus.
    assign-NAD so the CP Plus recognizes the node as a valid iNet Box peer
    (CP Plus menu: "PR SET" to re-init, per `inetbox.py`'s docs), but still
    never send a `truma temp`-style write.
-4. **First write, physically supervised.** Only after the command_counter
-   and checksum gaps above are fixed — test one write while watching the
-   physical CP Plus display to confirm the setpoint actually changes.
+4. **First write, physically supervised.** Test one write command (e.g.
+   room temperature only) while watching the physical CP Plus display to
+   confirm the setpoint actually changes AND that no other setting
+   (boiler mode, energy mix) visibly changed — the write-merge logic is
+   host-tested, but a live-hardware confirmation is still the right final
+   check before relying on it unattended.
 
 ## Repo layout
 

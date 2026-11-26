@@ -11,3 +11,6 @@ g++ -std=c++17 -Wall -Wextra -o /tmp/test_victronble test/test_victronble.cpp vi
 echo "---"
 g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumastatus test/test_trumastatus.cpp trumastatus.cpp trumaconv.cpp
 /tmp/test_trumastatus
+echo "---"
+g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumahandshake test/test_trumahandshake.cpp trumahandshake.cpp trumalin.cpp trumastatus.cpp trumaconv.cpp
+/tmp/test_trumahandshake
