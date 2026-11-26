@@ -14,17 +14,19 @@ See "What's done / what's not" below before wiring anything to a live heater.
 
 SmartShunt and SmartSolar are read passively over Bluetooth (BLE "Instant
 Readout" advertisements) — no physical connection to them at all. The node
-just needs their MAC address + AES encryption key (stored in `~/.hermes/.env`
-on the Hermes side, hardcoded into firmware at build time for now).
+just needs their MAC address + AES encryption key (from the Victron Connect
+app's "Instant Readout" setup for each device; see Victron's docs), set at
+build time via firmware config.
 
-### 2. Truma Combi LIN bus — the part you asked about
+### 2. Truma Combi LIN bus
 
-**Confirmed setup (photo of Marcin's actual CP Plus PCB, 2026-11-24):**
+**Confirmed bus layout (verified against a real CP Plus PCB):**
 the CP Plus has exactly **one** bus connector, a single RJ12 socket
 hand-labeled **"CI Bus"** on the PCB. There is no second/dedicated iNet
 port. The heater itself has two RJ12 sockets, but — because LIN is a
 multi-drop bus — those are almost certainly the same electrical bus
-duplicated, not two independent buses.
+duplicated, not two independent buses. (Not every CP Plus revision is
+guaranteed identical — check your own PCB before assuming this applies.)
 
 **-> Installation point: splice a splitter into the existing CI Bus cable**
 (the single cable between CP Plus and the heater). This is the officially
@@ -80,13 +82,13 @@ LIN:
 - **`olivluca/TruMinus`** — emulates the **CP Plus itself**, acting as the
   LIN **master**. Only safe if nothing else is already mastering the bus.
 
-Since Marcin's CP Plus is alive and already the bus master, a
-TruMinus-style master-mode firmware wired to the same bus would **contend**
-with the real CP Plus — this is the suspected cause of random Combi
-shutdowns / error codes reported by people who wired master-mode firmware
-onto a bus with a live CP Plus still attached (see WomoLIN GitHub issue
-discussions). The slave approach only ever replies when spoken to, so it's
-safe to splice into the shared CI Bus cable.
+If a live CP Plus is already mastering the bus, a TruMinus-style master-mode
+firmware wired onto the same bus would **contend** with it — this is the
+suspected cause of random Combi shutdowns / error codes reported by people
+who wired master-mode firmware onto a bus with a live CP Plus still attached
+(see WomoLIN GitHub issue discussions). The slave approach only ever replies
+when spoken to, so it's safe to splice into the shared CI Bus cable
+alongside a working CP Plus.
 
 ## What's done / what's not (as of 2026-11-26)
 
@@ -130,8 +132,8 @@ safe to splice into the shared CI Bus cable.
    (CP Plus menu: "PR SET" to re-init, per `inetbox.py`'s docs), but still
    never send a `truma temp`-style write.
 4. **First write, physically supervised.** Only after the command_counter
-   and checksum gaps above are fixed — test one write with Marcin watching
-   the physical CP Plus display to confirm the setpoint actually changes.
+   and checksum gaps above are fixed — test one write while watching the
+   physical CP Plus display to confirm the setpoint actually changes.
 
 ## Repo layout
 
