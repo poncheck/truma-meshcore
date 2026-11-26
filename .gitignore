@@ -1,0 +1,6 @@
+# Cloned third-party reference implementations (reproducible via their own
+# git history on GitHub, no need to version here)
+inetbox.py/
+TruMinus/
+victron-ble/
+MeshCore/
