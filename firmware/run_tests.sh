@@ -17,3 +17,12 @@ g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumahandshake test/test_trumahandshak
 echo "---"
 g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumalog test/test_trumalog.cpp trumalog.cpp
 /tmp/test_trumalog
+echo "---"
+g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumaframereader test/test_trumaframereader.cpp trumaframereader.cpp trumalin.cpp trumaconv.cpp
+/tmp/test_trumaframereader
+echo "---"
+g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumalinwriter test/test_trumalinwriter.cpp trumalinwriter.cpp trumalin.cpp trumaconv.cpp
+/tmp/test_trumalinwriter
+echo "---"
+g++ -std=c++17 -Wall -Wextra -o /tmp/test_trumaanswerwindow test/test_trumaanswerwindow.cpp
+/tmp/test_trumaanswerwindow
